@@ -131,13 +131,18 @@ function webform_share_components_update_form_submit($form, &$form_state) {
     foreach ($original->webform['components'] as $cid => $component) {
       $existing_components[$component['form_key']] = $cid;
     }
-    $next_id = empty($existing_components) ? 1 : max($existing_components) + 1;
+
+    // Get the max cid for this node's webform so we know where our safe starting point is.
+    $next_id = webform_share_get_next_max_cid($node->nid);
 
     // Overwrite the entire form if the user is updating everything.
     if (empty($form_state['values']['components_only'])) {
       $node->webform = $webform;
       $webform['nid'] = $node->nid;
     }
+
+    // We need to preserve the old to new cid mappings to match up parent (pid) IDs.
+    $old_to_new_mappings = array();
 
     // Map the imported components to the existing webform components.
     $node->webform['components'] = array();
@@ -149,6 +154,25 @@ function webform_share_components_update_form_submit($form, &$form_state) {
       else {
         $cid = $next_id++;
       }
+      // Preserve old cid for parent matching.
+      $old_to_new_mappings[$component['cid']] = $cid;
+      // Is there a parent ID we need to match up?
+      if(!empty($component['pid'])) {
+        // Get the new "cid" using the old cid from our old-to-new mappings array.
+        $new_parent_cid = $old_to_new_mappings[$component['pid']];
+        // Did we fail to get the matched parent cid?
+        if(empty($new_parent_cid)) {
+          // Report the failure to the user.
+          drupal_set_message(
+            t('Unable to map original parent "cid" to new parent for component: !component',
+              array('!component' => $component['name'])),
+            'error', true);
+        }
+        else {
+          $component['pid'] = $new_parent_cid;
+        }
+      }
+      // Set the new cid.
       $component['cid'] = $cid;
       $component['nid'] = $node->nid;
       $node->webform['components'][$cid] = $component;
@@ -164,6 +188,23 @@ function webform_share_components_update_form_submit($form, &$form_state) {
     node_save($node);
   }
   $form_state['redirect'] = 'node/' . $node->nid . '/webform';
+}
+
+/**
+ * Retrieves that last "cid" for a node's webform.
+ *
+ * @param int $nid
+ * @return int
+ */
+function webform_share_get_next_max_cid($nid) {
+  $max_cid = db_select('webform_component', 'w')
+    ->fields('w', array('cid'))
+    ->condition('nid', $nid)
+    ->orderBy('cid', 'DESC')
+    ->range(0, 1)
+    ->execute()
+  ->fetchField();
+  return (empty($max_cid) ? 1 : $max_cid);
 }
 
 
